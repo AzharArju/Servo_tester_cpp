@@ -20,8 +20,7 @@
     }
   },
   "idf.openOcdConfigs": [
-    "interface/ftdi/esp32_devkitj_v1.cfg",
-    "target/esp32.cfg"
+    "board/esp32-wrover-kit-3.3v.cfg"
   ],
   "idf.portWin": "COM10",
   "idf.currentSetup": "C:\\esp\\v6.1-beta1\\esp-idf",

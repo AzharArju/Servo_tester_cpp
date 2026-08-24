@@ -8,7 +8,7 @@
 #include "esp_err.h"
 #include "esp_log.h"
 
-constexpr int kServoGpio = 13;
+constexpr int kServoGpio = 26;
 constexpr uint32_t kServoFrequencyHz = 50;
 constexpr ledc_timer_bit_t kServoResolution = LEDC_TIMER_16_BIT;
 

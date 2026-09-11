@@ -3,6 +3,8 @@
 #include <cstdlib>
 #include <cstring>
 
+#include <atomic>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/ledc.h"
@@ -25,10 +27,13 @@ constexpr ledc_mode_t kPwmMode = LEDC_LOW_SPEED_MODE;
 constexpr ledc_timer_t kTimer = LEDC_TIMER_0;
 constexpr ledc_channel_t kChannel = LEDC_CHANNEL_0;
 
-
+constexpr uint32_t kMinPulseUs = 500;
+constexpr uint32_t kMaxPulseUs = 2500;
 
 static esp_bd_addr_t controller_address = {0x41, 0x42, 0x00, 0x00, 0x0F, 0x22};
 static bool connection_requested = false;
+
+static std::atomic<uint32_t> left_stick_y{127};
 
 
 uint32_t pulse_us_to_duty(uint32_t pulse_us){
@@ -42,12 +47,16 @@ uint32_t pulse_us_to_duty(uint32_t pulse_us){
 void gap_callback(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param) {
     if (event == ESP_BT_GAP_DISC_STATE_CHANGED_EVT && param->disc_st_chg.state == ESP_BT_GAP_DISCOVERY_STOPPED)
     ESP_LOGI("BT", "Discovery finished");
+
     if (event != ESP_BT_GAP_DISC_RES_EVT) return;
     ESP_LOGI("BT", "Discovered a nearby Bluetooth device");
+
     const uint8_t *address = param->disc_res.bda;
     ESP_LOG_BUFFER_HEX("BT_ADDR", address, ESP_BD_ADDR_LEN);
+
     const int property_count = param->disc_res.num_prop;
     const esp_bt_gap_dev_prop_t *properties = param->disc_res.prop;
+    
     for (int i = 0; i < property_count; ++i) {
         const esp_bt_gap_dev_prop_t &property = properties[i];
         ESP_LOGI("BT", "Property type=%d; length=%d bytes", property.type, property.len);
@@ -60,7 +69,9 @@ void gap_callback(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param) {
     }
 }
 
-
+uint32_t find_current_pulse_us(uint32_t left_stick_y) {
+    return kMaxPulseUs - (left_stick_y * (kMaxPulseUs - kMinPulseUs) / 255);
+}
 
 void hid_callback(esp_hidh_cb_event_t event, esp_hidh_cb_param_t *param)
 {
@@ -77,6 +88,15 @@ void hid_callback(esp_hidh_cb_event_t event, esp_hidh_cb_param_t *param)
     }
     if (event == ESP_HIDH_DATA_IND_EVT && param->data_ind.len >= 10) {
     const uint8_t *data = param->data_ind.data;
+    static TickType_t last_joystick_log = 0;
+    TickType_t now = xTaskGetTickCount();
+
+    if (now - last_joystick_log >= pdMS_TO_TICKS(100)) {
+    ESP_LOGI("STICKS", "LX=%u LY=%u RX=%u RY=%u",
+             data[1], data[2], data[3], data[4]);
+    last_joystick_log = now;
+    left_stick_y.store(data[2]);
+    }
     static uint8_t previous_controls[5] = {};
 
     if (std::memcmp(&data[5], previous_controls, 5) != 0) {
@@ -110,7 +130,7 @@ extern "C" void app_main(void)
 
     ledc_timer_config_t timer_config = {};
     timer_config.speed_mode = kPwmMode;
-    timer_config.duty_resolution = kServoResolution;
+            timer_config.duty_resolution = kServoResolution;
     timer_config.timer_num = kTimer;
     timer_config.freq_hz = kServoFrequencyHz;
     timer_config.clk_cfg = LEDC_AUTO_CLK;
@@ -128,19 +148,18 @@ extern "C" void app_main(void)
 
 
     vTaskDelay(pdMS_TO_TICKS(5000));
-    int x = 500;
-    uint32_t goal = 2500;
+
 
 
     while(true){
-
-    uint32_t Servo_duty = pulse_us_to_duty(x);
-
+    
+    uint32_t Servo_duty = pulse_us_to_duty(find_current_pulse_us(left_stick_y.load()));
 
     ESP_ERROR_CHECK(ledc_set_duty(kPwmMode, kChannel, Servo_duty));
     ESP_ERROR_CHECK(ledc_update_duty(kPwmMode, kChannel));
 
-    ESP_LOGI("SERVO", "Sending %d us pulse; duty count = %" PRIu32, x, Servo_duty);
-    vTaskDelay(pdMS_TO_TICKS(5000));
+    ESP_LOGI("SERVO", "Sending %d us pulse; duty count = %" PRIu32, find_current_pulse_us(left_stick_y.load()), Servo_duty);
+
+    vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
